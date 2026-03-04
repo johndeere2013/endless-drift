@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Endless AR Drift Nitro</title>
+<style>
+html,body{
+  margin:0;
+  overflow:hidden;
+  background:black;
+}
+video{
+  position:absolute;
+  width:100vw;
+  height:100vh;
+  object-fit:cover;
+}
+canvas{
+  position:absolute;
+  top:0;
+  left:0;
+}
+#ui{
+  position:absolute;
+  top:15px;
+  left:15px;
+  color:white;
+  font-family:sans-serif;
+  font-size:18px;
+}
+#nitroBar{
+  width:200px;
+  height:15px;
+  background:rgba(255,255,255,0.2);
+  margin-top:8px;
+}
+#nitroFill{
+  height:100%;
+  width:100%;
+  background:cyan;
+}
+button{
+  position:absolute;
+  top:15px;
+  right:15px;
+  padding:10px;
+}
+</style>
+</head>
+<body>
+
+<video id="cam" autoplay playsinline></video>
+<canvas id="game"></canvas>
+
+<div id="ui">
+Score: <span id="score">0</span><br>
+Drifting: <span id="drift">NO</span>
+<div id="nitroBar"><div id="nitroFill"></div></div>
+</div>
+
+<button id="switch">Switch Cam</button>
+
+<script>
+
+// ================= CAMERA =================
+const video = document.getElementById("cam");
+let facing = "environment";
+
+async function startCamera(){
+  if(video.srcObject){
+    video.srcObject.getTracks().forEach(t=>t.stop());
+  }
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video:{facingMode:facing},
+    audio:false
+  });
+  video.srcObject = stream;
+}
+startCamera();
+
+document.getElementById("switch").onclick = ()=>{
+  facing = facing==="environment" ? "user" : "environment";
+  startCamera();
+};
+
+// ================= CANVAS =================
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+function resize(){
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+resize();
+window.onresize = resize;
+
+// ================= WORLD =================
+let worldX = 0;
+let worldY = 0;
+const border = 200;
+
+// ================= CAR =================
+const car = {
+  x: canvas.width/2,
+  y: canvas.height/2,
+  angle: 0,
+  velX: 0,
+  velY: 0,
+  accel: 0.5,
+  friction: 0.97,
+  turnSpeed: 0.045,
+  baseMaxSpeed: 15,
+  boostMaxSpeed: 28,
+  driftGrip: 0.92,
+  normalGrip: 0.7,
+  width: 90,
+  height: 170
+};
+
+// ================= INPUT =================
+const keys = {};
+window.addEventListener("keydown", e=> keys[e.key.toLowerCase()] = true);
+window.addEventListener("keyup", e=> keys[e.key.toLowerCase()] = false);
+
+// ================= GAME STATE =================
+let score = 0;
+let nitro = 100;
+
+// ================= UPDATE =================
+function update(){
+
+  let boosting = false;
+
+  // BOOST
+  if(keys["shift"] && nitro > 0){
+    boosting = true;
+    nitro -= 0.8;
+  } else {
+    nitro += 0.3;
+  }
+
+  nitro = Math.max(0, Math.min(100, nitro));
+  document.getElementById("nitroFill").style.width = nitro + "%";
+
+  let maxSpeed = boosting ? car.boostMaxSpeed : car.baseMaxSpeed;
+
+  // ACCELERATION
+  if(keys["w"]){
+    car.velX += Math.sin(car.angle) * car.accel;
+    car.velY -= Math.cos(car.angle) * car.accel;
+  }
+  if(keys["s"]){
+    car.velX -= Math.sin(car.angle) * car.accel;
+    car.velY += Math.cos(car.angle) * car.accel;
+  }
+
+  // SPEED LIMIT
+  let speed = Math.hypot(car.velX, car.velY);
+  if(speed > maxSpeed){
+    car.velX *= maxSpeed / speed;
+    car.velY *= maxSpeed / speed;
+  }
+
+  // STEERING
+  if(speed > 1){
+    if(keys["a"]) car.angle -= car.turnSpeed;
+    if(keys["d"]) car.angle += car.turnSpeed;
+  }
+
+  // DRIFT SYSTEM
+  let drifting = false;
+  let grip = car.normalGrip;
+
+  if(keys[" "] && speed > 7){
+    drifting = true;
+    grip = car.driftGrip;
+    score += 4;
+  }
+
+  // REAL DRIFT VECTOR MATH
+  let forwardX = Math.sin(car.angle);
+  let forwardY = -Math.cos(car.angle);
+  let rightX = forwardY;
+  let rightY = -forwardX;
+
+  let forwardVel = forwardX * car.velX + forwardY * car.velY;
+  let sideVel = rightX * car.velX + rightY * car.velY;
+
+  sideVel *= grip;
+
+  car.velX = forwardX * forwardVel + rightX * sideVel;
+  car.velY = forwardY * forwardVel + rightY * sideVel;
+
+  // FRICTION
+  car.velX *= car.friction;
+  car.velY *= car.friction;
+
+  // MOVE
+  car.x += car.velX;
+  car.y += car.velY;
+
+  // ENDLESS WORLD SHIFT
+  if(car.x < border){
+    worldX += border - car.x;
+    car.x = border;
+  }
+  if(car.x > canvas.width - border){
+    worldX -= car.x - (canvas.width - border);
+    car.x = canvas.width - border;
+  }
+  if(car.y < border){
+    worldY += border - car.y;
+    car.y = border;
+  }
+  if(car.y > canvas.height - border){
+    worldY -= car.y - (canvas.height - border);
+    car.y = canvas.height - border;
+  }
+
+  document.getElementById("score").innerText = score;
+  document.getElementById("drift").innerText = drifting ? "YES" : "NO";
+}
+
+// ================= DRAW WORLD =================
+function drawWorld(){
+  ctx.save();
+  ctx.translate(worldX % 200, worldY % 200);
+
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
+  for(let x=-200; x<canvas.width+200; x+=200){
+    for(let y=-200; y<canvas.height+200; y+=200){
+      ctx.strokeRect(x,y,200,200);
+    }
+  }
+
+  ctx.restore();
+}
+
+// ================= DRAW CAR =================
+function drawCar(){
+
+  ctx.save();
+  ctx.translate(car.x, car.y);
+  ctx.rotate(car.angle);
+
+  // Shadow
+  ctx.fillStyle = "rgba(0,0,0,0.3)";
+  ctx.fillRect(-48, -88, 96, 176);
+
+  // Body
+  ctx.fillStyle = "#cc0000";
+  ctx.fillRect(-45, -85, 90, 170);
+
+  // Roof
+  ctx.fillStyle = "#222";
+  ctx.fillRect(-30, -20, 60, 60);
+
+  // Wheels
+  ctx.fillStyle = "black";
+  ctx.fillRect(-52, -60, 12, 30);
+  ctx.fillRect(40, -60, 12, 30);
+  ctx.fillRect(-52, 30, 12, 30);
+  ctx.fillRect(40, 30, 12, 30);
+
+  // Nitro flame
+  if(keys["shift"] && nitro > 0){
+    ctx.fillStyle = "cyan";
+    ctx.beginPath();
+    ctx.moveTo(0, 100);
+    ctx.lineTo(-15, 85);
+    ctx.lineTo(15, 85);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+// ================= LOOP =================
+function loop(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  update();
+  drawWorld();
+  drawCar();
+  requestAnimationFrame(loop);
+}
+
+loop();
+
+</script>
+</body>
+</html>
